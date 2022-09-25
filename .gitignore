@@ -4,6 +4,7 @@
 __pycache__
 example_commands.sh
 test_feat.py
+feat_demo_dir/*
 concat_features.py
 data
 out
