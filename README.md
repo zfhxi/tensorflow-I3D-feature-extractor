@@ -54,7 +54,8 @@ python extracting_feats.py -g=0 -vd=frames_demo_dir -vpf=video_list.txt -of=feat
 * `-g` : the gpu id,
 * `-vd` : video frames directory,
 * `-vpf` : the file contains the video names,
-* `-of` : output directory of feaures.
+* `-of` : output directory of feaures,
+* `-et` : evaluation type, also means the feature modality.
 
 
 
