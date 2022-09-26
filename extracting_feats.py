@@ -53,7 +53,7 @@ def main(unused_argv):
     parser.add_argument("-of", "--OUTPUT_FEAT_DIR", dest="OUTPUT_FEAT_DIR", type=str, default="feat_demo_dir", help="Output feature path")
     parser.add_argument("-vpf", "--VIDEO_PATH_FILE", type=str, default="video_list.txt", help="input video list")
     parser.add_argument("-vd", "--VIDEO_DIR", type=str, default="frames_demo_dir", help="frame directory")
-    parser.add_argument("-et", "--EVAL_TYPE", type=str, choices=["rgb", "flow"])
+    parser.add_argument("-et", "--EVAL_TYPE", type=str, default="rgb", choices=["rgb", "flow"])
     parser.add_argument("-bchs", "--BATCH_SIZE", type=int, default=40)
     parser.add_argument("-l", "--L", type=int, default=_SAMPLE_VIDEO_FRAMES, help="it seems to mean chunk size")
 
@@ -144,6 +144,7 @@ def main(unused_argv):
 
             features = np.concatenate(features, axis=0)
             # features = features[:n_feat:2]  # 16 frames per feature  (since 64-frame snippet corresponds to 8 features in I3D)
+            features = features[:n_feat:1]  # 16 frames per feature  (since 64-frame snippet corresponds to 8 features in I3D)
 
             feat_path = os.path.join(args.OUTPUT_FEAT_DIR, video_name + f"-{args.EVAL_TYPE}.npy")
 
