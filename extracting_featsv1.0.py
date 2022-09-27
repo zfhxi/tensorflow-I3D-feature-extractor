@@ -32,7 +32,7 @@ import i3d
 from PIL import Image
 
 _IMAGE_SIZE = 224
-_CHUNK_SIZE = 16
+_SAMPLE_VIDEO_FRAMES = 16
 _CHECKPOINT_PATHS = {
     "rgb_imagenet": "data/checkpoints/rgb_imagenet/model.ckpt",
     "flow_imagenet": "data/checkpoints/flow_imagenet/model.ckpt",
@@ -46,37 +46,33 @@ def resize_image(image):
     return image
 
 
-def load_rgb_frames(vn_frames_path, num_frames, start=1):
+def load_rgb_frames(image_dir, vid, start, num):
     frames = []
-    for i in range(num_frames):
-        img = cv2.imread(os.path.join(vn_frames_path, f"img_{start+i:05d}.jpg"))[:, :, [2, 1, 0]]
+    for i in range(start, start + num):
+        img = cv2.imread(os.path.join(image_dir, vid, f"img_{i:05d}.jpg"))[:, :, [2, 1, 0]]
         w, h, c = img.shape
-        # if w < 224 or h < 224:
-        #     d = 224.0 - min(w, h)
-        #     sc = 1 + d / min(w, h)
-        #     img = cv2.resize(img, dsize=(0, 0), fx=sc, fy=sc)
-        img = cv2.resize(img, (_IMAGE_SIZE, _IMAGE_SIZE))
+        if w < 226 or h < 226:
+            d = 226.0 - min(w, h)
+            sc = 1 + d / min(w, h)
+            img = cv2.resize(img, dsize=(0, 0), fx=sc, fy=sc)
         img = (img / 255.0) * 2 - 1
         frames.append(img)
     return np.asarray(frames, dtype=np.float32)
 
 
-def load_flow_frames(vn_frames_path, num_frames, start=0):
+def load_flow_frames(image_dir, vid, start, num):
     frames = []
-    for i in range(num_frames):
-        imgx = cv2.imread(os.path.join(vn_frames_path, f"flow_x_{i+start:05d}.jpg"), cv2.IMREAD_GRAYSCALE)
-        imgy = cv2.imread(os.path.join(vn_frames_path, f"flow_y_{i+start:05d}.jpg"), cv2.IMREAD_GRAYSCALE)
+    for i in range(start, start + num):
+        imgx = cv2.imread(os.path.join(image_dir, vid, vid + "-" + str(i).zfill(6) + "x.jpg"), cv2.IMREAD_GRAYSCALE)
+        imgy = cv2.imread(os.path.join(image_dir, vid, vid + "-" + str(i).zfill(6) + "y.jpg"), cv2.IMREAD_GRAYSCALE)
 
         w, h = imgx.shape
-        """
         if w < 224 or h < 224:
             d = 224.0 - min(w, h)
             sc = 1 + d / min(w, h)
             imgx = cv2.resize(imgx, dsize=(0, 0), fx=sc, fy=sc)
             imgy = cv2.resize(imgy, dsize=(0, 0), fx=sc, fy=sc)
-        """
-        imgx = cv2.resize(imgx, (_IMAGE_SIZE, _IMAGE_SIZE))
-        imgy = cv2.resize(imgy, (_IMAGE_SIZE, _IMAGE_SIZE))
+
         imgx = (imgx / 255.0) * 2 - 1
         imgy = (imgy / 255.0) * 2 - 1
         img = np.asarray([imgx, imgy]).transpose([1, 2, 0])
@@ -95,6 +91,7 @@ def main(unused_argv):
     parser.add_argument("-vd", "--VIDEO_DIR", type=str, default="frames_demo_dir", help="frame directory")
     parser.add_argument("-et", "--EVAL_TYPE", type=str, default="rgb", choices=["rgb", "flow"])
     parser.add_argument("-bchs", "--BATCH_SIZE", type=int, default=80)
+    parser.add_argument("-l", "--L", type=int, default=_SAMPLE_VIDEO_FRAMES, help="it seems to mean chunk size")
 
     args = parser.parse_args()
     # <<<<<<<<<<<<<<<<<<<< config <<<<<<<<<<<<<<<<<<<<
@@ -106,7 +103,7 @@ def main(unused_argv):
     tf.logging.set_verbosity(tf.logging.INFO)
     assert args.EVAL_TYPE in ["rgb", "flow"]
 
-    modality_input = tf.placeholder(tf.float32, shape=(args.BATCH_SIZE, _CHUNK_SIZE, _IMAGE_SIZE, _IMAGE_SIZE, 3 if args.EVAL_TYPE == "rgb" else 2))
+    modality_input = tf.placeholder(tf.float32, shape=(args.BATCH_SIZE, _SAMPLE_VIDEO_FRAMES, _IMAGE_SIZE, _IMAGE_SIZE, 3 if args.EVAL_TYPE == "rgb" else 2))
     with tf.variable_scope(_VARIABLE_SCOPE[args.EVAL_TYPE]):
         modality_model = i3d.InceptionI3d(400, spatial_squeeze=True, final_endpoint="Logits")
         _, end_points = modality_model(modality_input, is_training=False, dropout_keep_prob=1.0)
@@ -134,33 +131,55 @@ def main(unused_argv):
             print(f"Total frames: {n_frame}")
 
             features = []
-            n_feat = int(n_frame // _CHUNK_SIZE)
+            n_feat = int(n_frame // 16)
             n_batch = math.ceil(n_feat / args.BATCH_SIZE)
             print(f"n_frame: {n_frame}; n_feat: {n_feat}")
             print(f"n_batch: {n_batch}")
 
-            if args.EVAL_TYPE == "rgb":
-                images_array = load_rgb_frames(video_path, num_frames=n_frame)
-            elif args.EVAL_TYPE == "flow":
-                images_array = load_flow_frames(video_path, num_frames=n_frame)
             for i in range(n_batch):
-                s = i * args.BATCH_SIZE * _CHUNK_SIZE
-                e = (i + 1) * args.BATCH_SIZE * _CHUNK_SIZE
-                if e <= n_frame:
-                    input_blobs = images_array[s:e].reshape(args.BATCH_SIZE, _CHUNK_SIZE, _IMAGE_SIZE, _IMAGE_SIZE, -1)  # BATCH_SIZE,_CHUNK_SIZE,224,224,3
-                else:  # n_frame may be not divisible by BATCH_SIZE, so to form batches, some frames are reused
-                    delta_frame = e - n_frame
-                    input_blobs_part1 = images_array[s:]
-                    input_blobs_part2 = np.zeros((delta_frame,) + input_blobs_part1.shape[1:])  # images_array[:delta_frame]
-                    input_blobs = np.concatenate([input_blobs_part1, input_blobs_part2], axis=0).reshape(args.BATCH_SIZE, _CHUNK_SIZE, _IMAGE_SIZE, _IMAGE_SIZE, -1)
-                # >>>>>>>>>>>>>>>>>>>> forward each batch >>>>>>>>>>>>>>>>>>>>
-                clip_feature = sess.run(end_feature, feed_dict={modality_input: input_blobs})  # (BATCH_SIZE, 1, 1, 1, 1024)
-                clip_feature = np.reshape(clip_feature, (-1, clip_feature.shape[-1]))  # BATCH_SIZE,1024
+                # >>>>>>>>>>>>>>>>>>>> load frames >>>>>>>>>>>>>>>>>>>>
+                input_blobs = []
+                for j in range(args.BATCH_SIZE):
+                    input_blob = []
+                    for k in range(args.L):
+                        idx = i * args.BATCH_SIZE * args.L + j * args.L + k
+                        idx = int(idx)
+                        idx = idx % n_frame + 1
+                        if args.EVAL_TYPE == "rgb":
+                            image = Image.open(os.path.join(video_path, "img_%05d.jpg" % idx))
+                            image = resize_image(image)
+                        else:
+                            image_x = Image.open(os.path.join(video_path, f"flow_x_{idx-1:05d}.jpg"))
+                            image_y = Image.open(os.path.join(video_path, f"flow_y_{idx-1:05d}.jpg"))
+                            image_x = resize_image(image_x)
+                            image_y = resize_image(image_y)
+                            image = np.concatenate([np.expand_dims(image_x, axis=-1), np.expand_dims(image_y, axis=-1)], axis=-1)
+                        # """
+                        # image[:, :, 0] -= 104.0
+                        # image[:, :, 1] -= 117.0
+                        # image[:, :, 2] -= 123.0
+                        ## """
+                        # image[:, :, :] -= 127.5
+                        # image[:, :, :] /= 127.5
+                        image = (image * 2 / 255) - 1  # normalizing to [-1,1]
+
+                        input_blob.append(image)
+
+                    input_blob = np.array(input_blob, dtype="float32")  # 16,224,224,3
+
+                    input_blobs.append(input_blob)
+
+                input_blobs = np.array(input_blobs, dtype="float32")  # BATCH_SIZE,16,224,224,3
+                # >>>>>>>>>>>>>>>>>>>> forward n batch >>>>>>>>>>>>>>>>>>>>
+                clip_feature = sess.run(end_feature, feed_dict={modality_input: input_blobs})  # (80, 1, 1, 1, 1024)
+                # <<<<<<<<<<<<<<<<<<<< forward n batch <<<<<<<<<<<<<<<<<<<<
+                clip_feature = np.reshape(clip_feature, (-1, clip_feature.shape[-1]))  # 80,1024
+
                 features.append(clip_feature)
-                pass
+                # <<<<<<<<<<<<<<<<<<<< load frames <<<<<<<<<<<<<<<<<<<<
 
             features = np.concatenate(features, axis=0)
-            features = features[:n_feat]  # some frames are reused, we should cut
+            features = features[:n_feat]  # n_frame may be not divisible by BATCH_SIZE, so to form batches, some frames are reused, we should cut
 
             feat_path = os.path.join(args.OUTPUT_FEAT_DIR, video_name + f"-{args.EVAL_TYPE}.npy")
 
