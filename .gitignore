@@ -2,6 +2,7 @@
 .DS_Store
 .vscode
 __pycache__
-feat_demo_dir/*
+feat_demo_dir
+frames_demo_dir
 data
 out

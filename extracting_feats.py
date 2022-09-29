@@ -28,60 +28,46 @@ logging.getLogger("tensorflow").disabled = True
 
 import numpy as np
 import tensorflow as tf
-import i3d
 from PIL import Image
+import i3d
 
 _IMAGE_SIZE = 224
 _CHUNK_SIZE = 16
 _CHECKPOINT_PATHS = {
     "rgb_imagenet": "data/checkpoints/rgb_imagenet/model.ckpt",
     "flow_imagenet": "data/checkpoints/flow_imagenet/model.ckpt",
+    # "rgb_imagenet": "data/checkpoints/rgb_scratch/model.ckpt",
+    # "flow_imagenet": "data/checkpoints/flow_scratch/model.ckpt",
 }
 _VARIABLE_SCOPE = {"rgb": "RGB", "flow": "Flow"}
 
 
-def resize_image(image):
-    image = image.resize((_IMAGE_SIZE, _IMAGE_SIZE), Image.BILINEAR)
-    image = np.array(image, dtype="float32")
-    return image
-
-
-def load_rgb_frames(vn_frames_path, num_frames, start=1):
+def load_rgb_frames(vn_frames_path):
     frames = []
-    for i in range(num_frames):
-        img = cv2.imread(os.path.join(vn_frames_path, f"img_{start+i:05d}.jpg"))[:, :, [2, 1, 0]]
-        w, h, c = img.shape
-        # if w < 224 or h < 224:
-        #     d = 224.0 - min(w, h)
-        #     sc = 1 + d / min(w, h)
-        #     img = cv2.resize(img, dsize=(0, 0), fx=sc, fy=sc)
-        img = cv2.resize(img, (_IMAGE_SIZE, _IMAGE_SIZE))
+    imgfiles = sorted(os.listdir(vn_frames_path))
+    for imgname in imgfiles:
+        img = cv2.imread(os.path.join(vn_frames_path, imgname))[:, :, [2, 1, 0]]
+        # img = cv2.resize(img, (224, 224), cv2.INTER_LINEAR)
         img = (img / 255.0) * 2 - 1
         frames.append(img)
-    return np.asarray(frames, dtype=np.float32)
+    return np.asarray(frames, dtype=np.float32), len(imgfiles)
 
 
-def load_flow_frames(vn_frames_path, num_frames, start=0):
+def load_flow_frames(vn_frames_path):
     frames = []
-    for i in range(num_frames):
-        imgx = cv2.imread(os.path.join(vn_frames_path, f"flow_x_{i+start:05d}.jpg"), cv2.IMREAD_GRAYSCALE)
-        imgy = cv2.imread(os.path.join(vn_frames_path, f"flow_y_{i+start:05d}.jpg"), cv2.IMREAD_GRAYSCALE)
-
-        w, h = imgx.shape
-        """
-        if w < 224 or h < 224:
-            d = 224.0 - min(w, h)
-            sc = 1 + d / min(w, h)
-            imgx = cv2.resize(imgx, dsize=(0, 0), fx=sc, fy=sc)
-            imgy = cv2.resize(imgy, dsize=(0, 0), fx=sc, fy=sc)
-        """
-        imgx = cv2.resize(imgx, (_IMAGE_SIZE, _IMAGE_SIZE))
-        imgy = cv2.resize(imgy, (_IMAGE_SIZE, _IMAGE_SIZE))
+    allimgfiles = sorted(os.listdir(vn_frames_path))
+    ximgs = sorted(list(filter(lambda x: x.startswith("flow_x"), allimgfiles)))
+    yimgs = sorted(list(filter(lambda x: x.startswith("flow_y"), allimgfiles)))
+    n_frame = len(ximgs)
+    assert n_frame == len(yimgs)
+    for i in range(n_frame):
+        imgx = cv2.imread(os.path.join(vn_frames_path, ximgs[i]), cv2.IMREAD_GRAYSCALE)
+        imgy = cv2.imread(os.path.join(vn_frames_path, yimgs[i]), cv2.IMREAD_GRAYSCALE)
         imgx = (imgx / 255.0) * 2 - 1
         imgy = (imgy / 255.0) * 2 - 1
         img = np.asarray([imgx, imgy]).transpose([1, 2, 0])
         frames.append(img)
-    return np.asarray(frames, dtype=np.float32)
+    return np.asarray(frames, dtype=np.float32), n_frame
 
 
 def main(unused_argv):
@@ -94,7 +80,7 @@ def main(unused_argv):
     parser.add_argument("-vpf", "--VIDEO_PATH_FILE", type=str, default="video_list.txt", help="input video list")
     parser.add_argument("-vd", "--VIDEO_DIR", type=str, default="frames_demo_dir", help="frame directory")
     parser.add_argument("-et", "--EVAL_TYPE", type=str, default="rgb", choices=["rgb", "flow"])
-    parser.add_argument("-bchs", "--BATCH_SIZE", type=int, default=80)
+    parser.add_argument("-bchs", "--BATCH_SIZE", type=int, default=1)
 
     args = parser.parse_args()
     # <<<<<<<<<<<<<<<<<<<< config <<<<<<<<<<<<<<<<<<<<
@@ -127,22 +113,23 @@ def main(unused_argv):
         for cnt, video_name in enumerate(video_list):
             video_path = os.path.join(args.VIDEO_DIR, video_name)
             feat_path = os.path.join(args.OUTPUT_FEAT_DIR, video_name + ".npy")
-            n_frame = len([ff for ff in os.listdir(video_path) if ff.endswith(".jpg")])
-            if args.EVAL_TYPE == "flow":
-                assert n_frame % 2 == 0
-                n_frame = n_frame // 2
-            print(f"Total frames: {n_frame}")
+            # n_frame = len([ff for ff in os.listdir(video_path) if ff.endswith(".jpg")])
+            # if args.EVAL_TYPE == "flow":
+            #     assert n_frame % 2 == 0
+            #     n_frame = n_frame // 2
+            # print(f"Total frames: {n_frame}")
+
+            if args.EVAL_TYPE == "rgb":
+                images_array, n_frame = load_rgb_frames(video_path)
+            elif args.EVAL_TYPE == "flow":
+                images_array, n_frame = load_flow_frames(video_path)
 
             features = []
             n_feat = int(n_frame // _CHUNK_SIZE)
             n_batch = math.ceil(n_feat / args.BATCH_SIZE)
-            print(f"n_frame: {n_frame}; n_feat: {n_feat}")
-            print(f"n_batch: {n_batch}")
+            # print(f"n_frame: {n_frame}; n_feat: {n_feat}")
+            # print(f"n_batch: {n_batch}")
 
-            if args.EVAL_TYPE == "rgb":
-                images_array = load_rgb_frames(video_path, num_frames=n_frame)
-            elif args.EVAL_TYPE == "flow":
-                images_array = load_flow_frames(video_path, num_frames=n_frame)
             for i in range(n_batch):
                 s = i * args.BATCH_SIZE * _CHUNK_SIZE
                 e = (i + 1) * args.BATCH_SIZE * _CHUNK_SIZE
@@ -165,10 +152,11 @@ def main(unused_argv):
             feat_path = os.path.join(args.OUTPUT_FEAT_DIR, video_name + f"-{args.EVAL_TYPE}.npy")
 
             print(f"Saving features and probs for video: {video_name} ...")
-            print(features.shape)
+            # print(features.shape)
             np.save(feat_path, features)
 
-            print(f"{cnt}: {video_name} has been processed...")
+            # print(f"{cnt}: {video_name} has been processed...")
+    print("finished!")
 
 
 if __name__ == "__main__":
